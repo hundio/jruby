@@ -63,6 +63,8 @@ import org.jruby.ir.IRScriptBody;
 import org.jruby.ir.instructions.Instr;
 import org.jruby.ir.runtime.IRReturnJump;
 import org.jruby.javasupport.Java;
+import org.jruby.javasupport.JavaClass;
+import org.jruby.javasupport.JavaPackage;
 import org.jruby.javasupport.JavaSupport;
 import org.jruby.javasupport.JavaSupportImpl;
 import org.jruby.lexer.yacc.ISourcePosition;
@@ -99,7 +101,6 @@ import org.jruby.embed.Extension;
 import org.jruby.exceptions.MainExitException;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.ext.JRubyPOSIXHandler;
-import org.jruby.ext.LateLoadingLibrary;
 import org.jruby.ext.coverage.CoverageData;
 import org.jruby.ext.ffi.FFI;
 import org.jruby.ext.fiber.ThreadFiber;
@@ -144,7 +145,6 @@ import org.jruby.runtime.encoding.EncodingService;
 import org.jruby.runtime.invokedynamic.MethodNames;
 import org.jruby.runtime.load.BasicLibraryService;
 import org.jruby.runtime.load.CompiledScriptLoader;
-import org.jruby.runtime.load.Library;
 import org.jruby.runtime.load.LoadService;
 import org.jruby.runtime.opto.Invalidator;
 import org.jruby.runtime.opto.OptoFactory;
@@ -1245,9 +1245,9 @@ public final class Ruby implements Constantizable {
         // Create an IR manager and a top-level IR scope and bind it to the top-level static-scope object
         irManager = new IRManager(this, getInstanceConfig());
         // FIXME: This registers itself into static scope as a side-effect.  Let's make this
-        // relationship handled either more directly or through a descriptice method
+        // relationship handled either more directly or through a descriptive method
         // FIXME: We need a failing test case for this since removing it did not regress tests
-        IRScope top = new IRScriptBody(irManager, newSymbol(""), context.getCurrentScope().getStaticScope());
+        IRScope top = new IRScriptBody(irManager, "", context.getCurrentScope().getStaticScope());
         top.allocateInterpreterContext(new ArrayList<Instr>());
 
         // Initialize the "dummy" class used as a marker
@@ -1383,6 +1383,7 @@ public final class Ruby implements Constantizable {
 
         // set constants now that they're initialized
         basicObjectClass.setConstant("BasicObject", basicObjectClass);
+        objectClass.setConstant("BasicObject", basicObjectClass);
         objectClass.setConstant("Object", objectClass);
         objectClass.setConstant("Class", classClass);
         objectClass.setConstant("Module", moduleClass);
@@ -1483,10 +1484,7 @@ public final class Ruby implements Constantizable {
 
         // Filesystem should always have a value
         if (Platform.IS_WINDOWS) {
-            encoding = SafePropertyAccessor.getProperty("file.encoding", "UTF-8");
-            Encoding filesystemEncoding = encodingService.loadEncoding(ByteList.create(encoding));
-            if (filesystemEncoding == null) throw new MainExitException(1, "unknown encoding name - " + encoding);
-            setDefaultFilesystemEncoding(filesystemEncoding);
+            setDefaultFilesystemEncoding(encodingService.getWindowsFilesystemEncoding(this));
         } else {
             setDefaultFilesystemEncoding(getDefaultExternalEncoding());
         }
@@ -2862,30 +2860,49 @@ public final class Ruby implements Constantizable {
     }
 
     public RubyModule getClassFromPath(final String path) {
+        return getClassFromPath(path, getTypeError(), true);
+    }
+
+    /**
+     * Find module from a string (e.g. Foo, Foo::Bar::Car).
+     *
+     * @param path the path to be searched.
+     * @param undefinedExceptionClass exception type to be thrown when it cannot be found.
+     * @param flexibleSearch use getConstant vs getConstantAt (former will find inherited constants from parents and fire const_missing).
+     * @return the module or null when flexible search is false and a constant cannot be found.
+     */
+    public RubyModule getClassFromPath(final String path, RubyClass undefinedExceptionClass, boolean flexibleSearch) {
         if (path.length() == 0 || path.charAt(0) == '#') {
-            throw newTypeError(str(this, "can't retrieve anonymous class ", ids(this, path)));
+            throw newRaiseException(getTypeError(), str(this, "can't retrieve anonymous class ", ids(this, path)));
         }
 
+        ThreadContext context = getCurrentContext();
         RubyModule c = getObject();
         int pbeg = 0, p = 0;
-        for ( final int l = path.length(); p < l; ) {
+        for (int l = path.length(); p < l; ) {
             while ( p < l && path.charAt(p) != ':' ) p++;
 
             final String str = path.substring(pbeg, p);
 
             if ( p < l && path.charAt(p) == ':' ) {
                 if ( ++p < l && path.charAt(p) != ':' ) {
-                    throw newTypeError(str(this, "undefined class/module ", ids(this, str)));
+                    throw newRaiseException(undefinedExceptionClass, str(this, "undefined class/module ", ids(this, path)));
                 }
                 pbeg = ++p;
             }
 
-            IRubyObject cc = c.getConstant(str);
-            if ( ! ( cc instanceof RubyModule ) ) {
-                throw newTypeError(str(this, ids(this, path), " does not refer to class/module"));
+            // FIXME: JI depends on const_missing getting called from Marshal.load (ruby objests do not).  We should marshal JI objects differently so we do not differentiate here.
+            boolean isJava = c instanceof JavaPackage || JavaClass.isProxyType(context, c);
+            IRubyObject cc = flexibleSearch || isJava ? c.getConstant(str) : c.getConstantAt(str);
+
+            if (!flexibleSearch && cc == null) return null;
+
+            if (!(cc instanceof RubyModule)) {
+                throw newRaiseException(getTypeError(), str(this, ids(this, path), " does not refer to class/module"));
             }
             c = (RubyModule) cc;
         }
+
         return c;
     }
 
@@ -3079,19 +3096,20 @@ public final class Ruby implements Constantizable {
         return javaProxyClassFactory;
     }
 
-    public class CallTraceFuncHook extends EventHook {
+    private static final EnumSet<RubyEvent> interest =
+            EnumSet.of(
+                    RubyEvent.C_CALL,
+                    RubyEvent.C_RETURN,
+                    RubyEvent.CALL,
+                    RubyEvent.CLASS,
+                    RubyEvent.END,
+                    RubyEvent.LINE,
+                    RubyEvent.RAISE,
+                    RubyEvent.RETURN
+            );
+
+    public static class CallTraceFuncHook extends EventHook {
         private RubyProc traceFunc;
-        private EnumSet<RubyEvent> interest =
-                EnumSet.of(
-                        RubyEvent.C_CALL,
-                        RubyEvent.C_RETURN,
-                        RubyEvent.CALL,
-                        RubyEvent.CLASS,
-                        RubyEvent.END,
-                        RubyEvent.LINE,
-                        RubyEvent.RAISE,
-                        RubyEvent.RETURN
-                );
 
         public void setTraceFunc(RubyProc traceFunc) {
             this.traceFunc = traceFunc;
@@ -3100,19 +3118,20 @@ public final class Ruby implements Constantizable {
         public void eventHandler(ThreadContext context, String eventName, String file, int line, String name, IRubyObject type) {
             if (!context.isWithinTrace()) {
                 if (file == null) file = "(ruby)";
-                if (type == null) type = getNil();
+                if (type == null) type = context.nil;
 
-                RubyBinding binding = RubyBinding.newBinding(Ruby.this, context.currentBinding());
+                Ruby runtime = context.runtime;
+                RubyBinding binding = RubyBinding.newBinding(runtime, context.currentBinding());
 
                 context.preTrace();
                 try {
-                    traceFunc.call(context, new IRubyObject[] {
-                        newString(eventName), // event name
-                        newString(file), // filename
-                        newFixnum(line), // line numbers should be 1-based
-                        name != null ? newSymbol(name) : getNil(),
-                        binding,
-                        type
+                    traceFunc.call(context, new IRubyObject[]{
+                            runtime.newString(eventName), // event name
+                            runtime.newString(file), // filename
+                            runtime.newFixnum(line), // line numbers should be 1-based
+                            name != null ? runtime.newSymbol(name) : runtime.getNil(),
+                            binding,
+                            type
                     });
                 } finally {
                     context.postTrace();
@@ -3124,12 +3143,17 @@ public final class Ruby implements Constantizable {
         public boolean isInterestedInEvent(RubyEvent event) {
             return interest.contains(event);
         }
+
+        @Override
+        public EnumSet<RubyEvent> eventSet() {
+            return interest;
+        }
     };
 
-    private final CallTraceFuncHook callTraceFuncHook = new CallTraceFuncHook();
+    private static final CallTraceFuncHook callTraceFuncHook = new CallTraceFuncHook();
 
     public synchronized void addEventHook(EventHook hook) {
-        if (!RubyInstanceConfig.FULL_TRACE_ENABLED) {
+        if (!RubyInstanceConfig.FULL_TRACE_ENABLED && hook.needsDebug()) {
             // without full tracing, many events will not fire
             getWarnings().warn("tracing (e.g. set_trace_func) will not capture all events without --debug flag");
         }
@@ -3299,17 +3323,6 @@ public final class Ruby implements Constantizable {
         if (!context.hasAnyScopes()) {
             StaticScope topStaticScope = getStaticScopeFactory().newLocalScope(null);
             context.pushScope(new ManyVarsDynamicScope(topStaticScope, null));
-        }
-
-        // terminate signal-handling thread to avoid races with at_exit
-        ExecutorService executor = (ExecutorService) getModule("Signal").getInternalVariable("executor");
-        try {
-            executor.shutdown();
-            if (!executor.awaitTermination(1, TimeUnit.HOURS)) {
-                throw newRuntimeError("failed to execute at_exit blocks within 1h timeout");
-            }
-        } catch (InterruptedException ie) {
-            throw newRuntimeError("interrupted while attempting to execute at_exit blocks");
         }
 
         while (!atExitBlocks.empty()) {
@@ -4325,7 +4338,7 @@ public final class Ruby implements Constantizable {
         RubyException ex = RubyStopIteration.newInstance(context, result, message);
 
         if (!RubyInstanceConfig.STOPITERATION_BACKTRACE) {
-            ex.forceBacktrace(disabledBacktrace());
+            ex.setBacktrace(disabledBacktrace());
         }
 
         return ex.toThrowable();
@@ -4669,6 +4682,7 @@ public final class Ruby implements Constantizable {
     /**
      * Mark Fixnum as reopened
      */
+    @Deprecated
     public void reopenFixnum() {
         fixnumInvalidator.invalidate();
         fixnumReopened = true;
@@ -4677,6 +4691,7 @@ public final class Ruby implements Constantizable {
     /**
      * Retrieve the invalidator for Fixnum reopening
      */
+    @Deprecated
     public Invalidator getFixnumInvalidator() {
         return fixnumInvalidator;
     }
@@ -4684,6 +4699,7 @@ public final class Ruby implements Constantizable {
     /**
      * Whether the Float class has been reopened and modified
      */
+    @Deprecated
     public boolean isFixnumReopened() {
         return fixnumReopened;
     }
@@ -4691,6 +4707,7 @@ public final class Ruby implements Constantizable {
     /**
      * Mark Float as reopened
      */
+    @Deprecated
     public void reopenFloat() {
         floatInvalidator.invalidate();
         floatReopened = true;
@@ -4699,6 +4716,7 @@ public final class Ruby implements Constantizable {
     /**
      * Retrieve the invalidator for Float reopening
      */
+    @Deprecated
     public Invalidator getFloatInvalidator() {
         return floatInvalidator;
     }
@@ -4706,6 +4724,7 @@ public final class Ruby implements Constantizable {
     /**
      * Whether the Float class has been reopened and modified
      */
+    @Deprecated
     public boolean isFloatReopened() {
         return floatReopened;
     }

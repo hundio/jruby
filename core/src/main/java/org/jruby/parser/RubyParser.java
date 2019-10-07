@@ -16,7 +16,7 @@
  * rights and limitations under the License.
  *
  * Copyright (C) 2008-2017 Thomas E Enebo <enebo@acm.org>
- * 
+ *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
  * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
@@ -123,6 +123,7 @@ import org.jruby.lexer.yacc.RubyLexer;
 import org.jruby.lexer.yacc.StrTerm;
 import org.jruby.lexer.yacc.SyntaxException.PID;
 import org.jruby.util.ByteList;
+import org.jruby.util.CommonByteLists;
 import org.jruby.util.KeyValuePair;
 import org.jruby.util.StringSupport;
 import static org.jruby.lexer.LexingCommon.EXPR_BEG;
@@ -134,7 +135,7 @@ import static org.jruby.lexer.LexingCommon.EXPR_END;
 import static org.jruby.lexer.LexingCommon.EXPR_LABEL;
 import static org.jruby.parser.ParserSupport.value_expr;
 
- 
+
 public class RubyParser {
     protected ParserSupport support;
     protected RubyLexer lexer;
@@ -162,7 +163,7 @@ public class RubyParser {
         support.setWarnings(warnings);
         lexer.setWarnings(warnings);
     }
-					// line 166 "-"
+					// line 167 "-"
   // %token constants
   public static final int keyword_class = 257;
   public static final int keyword_module = 258;
@@ -1657,11 +1658,11 @@ public class RubyParser {
             yyN = yyTable[yyN];			// reduce (yyN)
           else
             switch (yyErrorFlag) {
-  
+
             case 0:
               support.yyerror("syntax error", yyExpecting(yyState), yyNames[yyToken]);
               if (yydebug != null) yydebug.error("syntax error");
-  
+
             case 1: case 2:
               yyErrorFlag = 3;
               do {
@@ -1678,7 +1679,7 @@ public class RubyParser {
               } while (-- yyTop >= 0);
               if (yydebug != null) yydebug.reject();
               support.yyerror("irrecoverable syntax error");
-  
+
             case 3:
               if (yyToken == 0) {
                 if (yydebug != null) yydebug.reject();
@@ -2118,7 +2119,7 @@ states[62] = new ParserState() {
 };
 states[63] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
-                    yyVal = support.new_call(((Node)yyVals[-4+yyTop]), ((ByteList)yyVals[-3+yyTop]), ((ByteList)yyVals[-2+yyTop]), ((Node)yyVals[-1+yyTop]), ((IterNode)yyVals[0+yyTop])); 
+                    yyVal = support.new_call(((Node)yyVals[-4+yyTop]), ((ByteList)yyVals[-3+yyTop]), ((ByteList)yyVals[-2+yyTop]), ((Node)yyVals[-1+yyTop]), ((IterNode)yyVals[0+yyTop]));
     return yyVal;
   }
 };
@@ -3155,7 +3156,7 @@ states[227] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
                     value_expr(lexer, ((Node)yyVals[-2+yyTop]));
                     value_expr(lexer, ((Node)yyVals[0+yyTop]));
-    
+
                     boolean isLiteral = ((Node)yyVals[-2+yyTop]) instanceof FixnumNode && ((Node)yyVals[0+yyTop]) instanceof FixnumNode;
                     yyVal = new DotNode(support.getPosition(((Node)yyVals[-2+yyTop])), support.makeNullNil(((Node)yyVals[-2+yyTop])), support.makeNullNil(((Node)yyVals[0+yyTop])), false, isLiteral);
     return yyVal;
@@ -3658,7 +3659,7 @@ states[314] = new ParserState() {
 };
 states[315] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
-                    lexer.setState(EXPR_ENDARG); 
+                    lexer.setState(EXPR_ENDARG);
     return yyVal;
   }
 };
@@ -3755,13 +3756,13 @@ states[328] = new ParserState() {
 states[329] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
                     support.frobnicate_fcall_args(((FCallNode)yyVals[-1+yyTop]), null, ((IterNode)yyVals[0+yyTop]));
-                    yyVal = ((FCallNode)yyVals[-1+yyTop]);                    
+                    yyVal = ((FCallNode)yyVals[-1+yyTop]);
     return yyVal;
   }
 };
 states[331] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
-                    if (((Node)yyVals[-1+yyTop]) != null && 
+                    if (((Node)yyVals[-1+yyTop]) != null &&
                           ((BlockAcceptingNode)yyVals[-1+yyTop]).getIterNode() instanceof BlockPassNode) {
                           lexer.compile_error(PID.BLOCK_ARG_AND_BLOCK_GIVEN, "Both block arg and actual block given.");
                     }
@@ -3900,7 +3901,7 @@ states[349] = new ParserState() {
 };
 states[350] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
-                    if (support.isInDef()) { 
+                    if (support.isInDef()) {
                         support.yyerror("module definition in method body");
                     }
                     yyVal = support.isInClass();
@@ -3947,7 +3948,7 @@ states[354] = new ParserState() {
 };
 states[355] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
-                    lexer.setState(EXPR_FNAME); 
+                    lexer.setState(EXPR_FNAME);
                     yyVal = support.isInDef();
                     support.setInDef(true);
     return yyVal;
@@ -4551,7 +4552,7 @@ states[454] = new ParserState() {
 };
 states[455] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
-                    yyVal = null; 
+                    yyVal = null;
     return yyVal;
   }
 };
@@ -4920,7 +4921,7 @@ states[511] = new ParserState() {
 };
 states[512] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
-                    yyVal = ((NumericNode)yyVals[0+yyTop]);  
+                    yyVal = ((NumericNode)yyVals[0+yyTop]);
     return yyVal;
   }
 };
@@ -5508,7 +5509,7 @@ states[603] = new ParserState() {
                     if (!support.is_local_id(((ByteList)yyVals[0+yyTop]))) {
                         support.yyerror("rest argument must be local variable");
                     }
-                    
+
                     yyVal = new RestArgNode(support.arg_var(support.shadowing_lvar(((ByteList)yyVals[0+yyTop]))));
     return yyVal;
   }
@@ -5516,7 +5517,7 @@ states[603] = new ParserState() {
 states[604] = new ParserState() {
   @Override public Object execute(ParserSupport support, RubyLexer lexer, Object yyVal, Object[] yyVals, int yyTop) {
   /* FIXME: bytelist_love: somewhat silly to remake the empty bytelist over and over but this type should change (using null vs "" is a strange distinction).*/
-  yyVal = new UnnamedRestArgNode(lexer.getPosition(), support.symbolID(new ByteList(new byte[] {})), support.getCurrentScope().addVariable("*"));
+  yyVal = new UnnamedRestArgNode(lexer.getPosition(), support.symbolID(CommonByteLists.EMPTY), support.getCurrentScope().addVariable("*"));
     return yyVal;
   }
 };
@@ -5537,7 +5538,7 @@ states[607] = new ParserState() {
                     if (!support.is_local_id(((ByteList)yyVals[0+yyTop]))) {
                         support.yyerror("block argument must be local variable");
                     }
-                    
+
                     yyVal = new BlockArgNode(support.arg_var(support.shadowing_lvar(((ByteList)yyVals[0+yyTop]))));
     return yyVal;
   }
@@ -5754,16 +5755,16 @@ states[651] = new ParserState() {
 }
 					// line 2778 "RubyParser.y"
 
-    /** The parse method use an lexer stream and parse it to an AST node 
+    /** The parse method use an lexer stream and parse it to an AST node
      * structure
      */
     public RubyParserResult parse(ParserConfiguration configuration) throws IOException {
         support.reset();
         support.setConfiguration(configuration);
         support.setResult(new RubyParserResult());
-        
+
         yyparse(lexer, configuration.isDebug() ? new YYDebug() : null);
-        
+
         return support.getResult();
     }
 }

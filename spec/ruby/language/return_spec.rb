@@ -362,7 +362,7 @@ describe "The return keyword" do
           END_OF_CODE
         end
 
-        ruby_bug "#14061", "2.4"..."2.6" do
+        ruby_bug "#14061", "2.4"..."2.5" do
           it "fires ensure block before returning while loads file" do
             File.write(@filename, <<-END_OF_CODE)
               ScratchPad << "before begin"
@@ -413,7 +413,7 @@ describe "The return keyword" do
         ruby_version_is ""..."2.5" do
           it "is allowed" do
             File.write(@filename, <<-END_OF_CODE)
-              class A
+              class ReturnSpecs::A
                 ScratchPad << "before return"
                 return
 
@@ -429,7 +429,7 @@ describe "The return keyword" do
         ruby_version_is "2.5" do
           it "raises a SyntaxError" do
             File.write(@filename, <<-END_OF_CODE)
-              class A
+              class ReturnSpecs::A
                 ScratchPad << "before return"
                 return
 
@@ -445,7 +445,7 @@ describe "The return keyword" do
       describe "within a block within a class" do
         it "is allowed" do
           File.write(@filename, <<-END_OF_CODE)
-            class A
+            class ReturnSpecs::A
               ScratchPad << "before return"
               1.times { return }
               ScratchPad << "after return"

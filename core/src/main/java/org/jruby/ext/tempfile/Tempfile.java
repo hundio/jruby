@@ -97,10 +97,10 @@ public class Tempfile extends RubyFile implements Finalizable {
 
         // GH#1905: don't use JDK's deleteOnExit because it grows a set without bounds
         context.runtime.addInternalFinalizer(Tempfile.this);
-        
+
         return context.nil;
     }
-    
+
     private class TempfileCallback implements BlockCallback {
         @Override
         public IRubyObject call(ThreadContext context, IRubyObject[] args, Block block) {
@@ -183,7 +183,7 @@ public class Tempfile extends RubyFile implements Finalizable {
     @JRubyMethod(name = {"unlink", "delete"})
     public IRubyObject unlink(ThreadContext context) {
         if (openFile.getPath() == null) return context.nil;
-        
+
         Ruby runtime = context.runtime;
         POSIX posix = runtime.getPosix();
 

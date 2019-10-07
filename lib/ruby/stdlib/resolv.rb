@@ -175,8 +175,6 @@ class Resolv
     if WINDOWS
       require 'win32/resolv'
       DefaultFileName = Win32::Resolv.get_hosts_path || IO::NULL
-    rescue LoadError
-      DefaultFileName = Win32::Resolv.get_hosts_path
     else
       DefaultFileName = '/etc/hosts'
     end

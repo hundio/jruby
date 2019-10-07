@@ -50,6 +50,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import com.headius.backport9.stack.StackWalker;
 import jnr.constants.platform.Errno;
 import jnr.posix.POSIX;
 
@@ -62,11 +63,9 @@ import org.jruby.common.RubyWarnings;
 import org.jruby.exceptions.CatchThrow;
 import org.jruby.exceptions.MainExitException;
 import org.jruby.exceptions.RaiseException;
-import org.jruby.exceptions.TypeError;
 import org.jruby.internal.runtime.methods.DynamicMethod;
 import org.jruby.internal.runtime.methods.JavaMethod.JavaMethodNBlock;
 import org.jruby.ir.interpreter.Interpreter;
-import org.jruby.ir.runtime.IRRuntimeHelpers;
 import org.jruby.java.proxies.ConcreteJavaProxy;
 import org.jruby.platform.Platform;
 import org.jruby.runtime.Arity;
@@ -80,6 +79,7 @@ import org.jruby.runtime.Visibility;
 import org.jruby.runtime.DynamicScope;
 import org.jruby.runtime.backtrace.RubyStackTraceElement;
 import org.jruby.runtime.builtin.IRubyObject;
+import org.jruby.runtime.callsite.CacheEntry;
 import org.jruby.util.ArraySupport;
 import org.jruby.util.ByteList;
 import org.jruby.util.ConvertBytes;
@@ -167,31 +167,52 @@ public class RubyKernel {
         runtime.setRespondToMissingMethod(module.searchMethod("respond_to_missing?"));
     }
 
-    @JRubyMethod(module = true, visibility = PRIVATE, reads = {CLASS})
+    @JRubyMethod(module = true, visibility = PRIVATE)
     public static IRubyObject at_exit(ThreadContext context, IRubyObject recv, Block block) {
         return context.runtime.pushExitBlock(context.runtime.newProc(Block.Type.PROC, block));
     }
 
-    @JRubyMethod(name = "autoload?", required = 1, module = true, visibility = PRIVATE, reads = {CLASS})
+    @JRubyMethod(name = "autoload?", required = 1, module = true, visibility = PRIVATE)
     public static IRubyObject autoload_p(ThreadContext context, final IRubyObject recv, IRubyObject symbol) {
-        final RubyModule module = getModuleForAutoload(context, recv);
-
-        if (module == null) {
-            return context.nil;
-        }
-
-        return module.autoload_p(context, symbol);
+        final Ruby runtime = context.runtime;
+        final RubyModule module = getModuleForAutoload(runtime, recv);
+        final RubyString file = module.getAutoloadFile(symbol.asJavaString());
+        return file == null ? context.nil : file;
     }
 
-    @JRubyMethod(required = 2, module = true, visibility = PRIVATE, reads = {CLASS})
+    @JRubyMethod(required = 2, module = true, visibility = PRIVATE)
     public static IRubyObject autoload(ThreadContext context, final IRubyObject recv, IRubyObject symbol, IRubyObject file) {
-        final RubyModule module = getModuleForAutoload(context, recv);
+        final Ruby runtime = context.runtime;
+        final String nonInternedName = symbol.asJavaString();
 
-        if (module == null) {
-            throw context.runtime.newTypeError("Can not set autoload on singleton class");
+        if (!IdUtil.isValidConstantName(nonInternedName)) {
+            throw runtime.newNameError("autoload must be constant name", nonInternedName);
         }
 
-        return module.autoload(context, symbol, file);
+        final RubyString fileString =
+            StringSupport.checkEmbeddedNulls(runtime, RubyFile.get_path(context, file));
+
+        if (fileString.isEmpty()) throw runtime.newArgumentError("empty file name");
+
+        final String baseName = nonInternedName.intern(); // interned, OK for "fast" methods
+        final RubyModule module = getModuleForAutoload(runtime, recv);
+
+        IRubyObject existingValue = module.fetchConstant(baseName);
+        if (existingValue != null && existingValue != RubyObject.UNDEF) return context.nil;
+
+        module.defineAutoload(baseName, new RubyModule.AutoloadMethod() {
+
+            public RubyString getFile() { return fileString; }
+
+            public void load(final Ruby runtime) {
+                final String file = getFile().asJavaString();
+                if (runtime.getLoadService().autoloadRequire(file)) {
+                    // Do not finish autoloading by cyclic autoload
+                    module.finishAutoload(baseName);
+                }
+            }
+        });
+        return context.nil;
     }
 
     @Deprecated
@@ -199,14 +220,13 @@ public class RubyKernel {
         return autoload(recv.getRuntime().getCurrentContext(), recv, symbol, file);
     }
 
-    static RubyModule getModuleForAutoload(ThreadContext context, IRubyObject recv) {
-        RubyModule target = IRRuntimeHelpers.findInstanceMethodContainer(context, context.getCurrentScope(), recv);
-
-        while (target != null && (target.isSingleton() || target.isIncluded())) {
-            target = target.getSuperClass();
+    static RubyModule getModuleForAutoload(Ruby runtime, IRubyObject recv) {
+        RubyModule module = recv instanceof RubyModule ? (RubyModule) recv : recv.getMetaClass().getRealClass();
+        if (module == runtime.getKernel()) {
+            // special behavior if calling Kernel.autoload directly
+            module = runtime.getObject().getSingletonClass();
         }
-
-        return target;
+        return module;
     }
 
     public static IRubyObject method_missing(ThreadContext context, IRubyObject recv, IRubyObject[] args, Block block) {
@@ -832,14 +852,15 @@ public class RubyKernel {
 
         // semi extract_raise_opts :
         IRubyObject cause = null;
-        if ( argc > 0 ) {
+        if (argc > 0) {
             IRubyObject last = args[argc - 1];
-            if ( last instanceof RubyHash ) {
-                RubyHash opt = (RubyHash) last; RubySymbol key;
-                if ( ! opt.isEmpty() && ( opt.has_key_p( context, key = runtime.newSymbol("cause") ) == runtime.getTrue() ) ) {
+            if (last instanceof RubyHash) {
+                RubyHash opt = (RubyHash) last;
+                RubySymbol key;
+                if (!opt.isEmpty() && (opt.has_key_p(context, key = runtime.newSymbol("cause")) == runtime.getTrue())) {
                     cause = opt.delete(context, key, Block.NULL_BLOCK);
                     forceCause = true;
-                    if ( opt.isEmpty() && --argc == 0 ) { // more opts will be passed along
+                    if (opt.isEmpty() && --argc == 0) { // more opts will be passed along
                         throw runtime.newArgumentError("only cause is given with no arguments");
                     }
                 }
@@ -876,7 +897,7 @@ public class RubyKernel {
                 break;
             default:
                 RubyException exception = convertToException(context, args[0], args[1]);
-                exception.forceBacktrace(args[2]);
+                exception.setBacktrace(args[2]);
                 raise = exception.toThrowable();
                 break;
         }
@@ -968,19 +989,30 @@ public class RubyKernel {
         return requireCommon(context.runtime, RubyFile.get_path(context, name), block);
     }
 
-    @Deprecated
-    public static IRubyObject require(IRubyObject recv, IRubyObject name, Block block) {
-        return require(recv.getRuntime().getCurrentContext(), recv, name, block);
-    }
-
-    @Deprecated
-    public static IRubyObject require19(ThreadContext context, IRubyObject recv, IRubyObject name, Block block) {
-        return require(context, recv, name, block);
-    }
-
     private static IRubyObject requireCommon(Ruby runtime, RubyString name, Block block) {
         RubyString path = StringSupport.checkEmbeddedNulls(runtime, name);
         return runtime.newBoolean(runtime.getLoadService().require(path.toString()));
+    }
+
+    @JRubyMethod(name = "require_relative", module = true, visibility = PRIVATE, reads = SCOPE)
+    public static IRubyObject require_relative(ThreadContext context, IRubyObject recv, IRubyObject name){
+        Ruby runtime = context.runtime;
+
+        RubyString relativePath = RubyFile.get_path(context, name);
+
+        String file = context.getCurrentStaticScope().getIRScope().getFile();
+
+        if (file == null || file.matches("\\A\\((.*)\\)")) {
+            throw runtime.newLoadError("cannot infer basepath");
+        }
+
+        RubyClass fileClass = runtime.getFile();
+        IRubyObject realpath = RubyFile.realpath(context, fileClass, runtime.newString(file));
+        IRubyObject dirname = RubyFile.dirname(context, fileClass,
+                realpath);
+        IRubyObject absoluteFeature = RubyFile.expand_path(context, fileClass, relativePath, dirname);
+
+        return RubyKernel.require(context, runtime.getKernel(), absoluteFeature, Block.NULL_BLOCK);
     }
 
     @JRubyMethod(name = "load", module = true, visibility = PRIVATE)
@@ -1205,7 +1237,7 @@ public class RubyKernel {
         return RubyUncaughtThrowError.newUncaughtThrowError(runtime, tag, value, message).toThrowable();
     }
 
-    @JRubyMethod(module = true, visibility = PRIVATE)
+    @JRubyMethod(module = true, visibility = PRIVATE, omit = true)
     public static IRubyObject warn(ThreadContext context, IRubyObject recv, IRubyObject _message) {
         if (_message instanceof RubyArray) {
             RubyArray messageArray = _message.convertToArray();
@@ -1213,7 +1245,7 @@ public class RubyKernel {
             return context.nil;
         }
 
-        return warn(context, recv, _message.convertToString());
+        return warn(context, recv, _message.asString());
     }
 
     static IRubyObject warn(ThreadContext context, IRubyObject recv, RubyString message) {
@@ -1231,7 +1263,7 @@ public class RubyKernel {
 
     public static final String[] WARN_VALID_KEYS = { "uplevel" };
 
-    @JRubyMethod(module = true, rest = true, visibility = PRIVATE)
+    @JRubyMethod(module = true, rest = true, visibility = PRIVATE, omit = true)
     public static IRubyObject warn(ThreadContext context, IRubyObject recv, IRubyObject[] args) {
         boolean kwargs = false;
         int uplevel = 0;
@@ -1253,7 +1285,7 @@ public class RubyKernel {
         int numberOfMessages = kwargs ? args.length - 1 : args.length;
 
         if (kwargs) {
-            RubyStackTraceElement element = context.runtime.getInstanceConfig().getTraceType().getBacktraceElement(context, uplevel);
+            RubyStackTraceElement element = context.getSingleBacktrace(uplevel);
 
             RubyString baseMessage = context.runtime.newString();
             baseMessage.catString(element.getFileName() + ':' + element.getLineNumber() + ": warning: ");
@@ -1911,13 +1943,14 @@ public class RubyKernel {
         args = ( length == 0 ) ? IRubyObject.NULL_ARRAY : ArraySupport.newCopy(args, 1, length);
 
         final RubyClass klass = RubyBasicObject.getMetaClass(recv);
-        DynamicMethod method = klass.searchMethod(name);
+        CacheEntry entry = klass.searchWithCache(name);
+        DynamicMethod method = entry.method;
 
         if (method.isUndefined() || method.getVisibility() != PUBLIC) {
             return Helpers.callMethodMissing(context, recv, klass, method.getVisibility(), name, CallType.NORMAL, args, block);
         }
 
-        return method.call(context, recv, klass, name, args, block);
+        return method.call(context, recv, entry.sourceModule, name, args, block);
     }
 
     /*
@@ -2340,5 +2373,15 @@ public class RubyKernel {
                 Arity.checkArgumentCount(context.runtime, args, 0, 2);
                 return null; // not reached
         }
+    }
+
+    @Deprecated
+    public static IRubyObject require(IRubyObject recv, IRubyObject name, Block block) {
+        return require(recv.getRuntime().getCurrentContext(), recv, name, block);
+    }
+
+    @Deprecated
+    public static IRubyObject require19(ThreadContext context, IRubyObject recv, IRubyObject name, Block block) {
+        return require(context, recv, name, block);
     }
 }
