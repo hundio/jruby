@@ -3169,28 +3169,71 @@ public class RubyModule extends RubyObject {
         return context.nil;
     }
 
-    @JRubyMethod(name = "method_defined?", required = 1)
-    public RubyBoolean method_defined_p(ThreadContext context, IRubyObject symbol) {
-        return isMethodBound(TypeConverter.checkID(symbol).idString(), true) ? context.tru : context.fals;
+    @JRubyMethod(name = "method_defined?", required = 1, optional = 1)
+    public RubyBoolean method_defined_p(ThreadContext context, IRubyObject[] args) {
+        IRubyObject symbol = args[0];
+        boolean searchAncestors = args.length == 1 || args[1].isTrue();
+        String methodName = TypeConverter.checkID(symbol).idString();
+
+        boolean result;
+        if (searchAncestors) {
+            result = isMethodBound(methodName, true);
+        } else {
+            DynamicMethod method = methods.get(methodName);
+            if (method == null) method = UndefinedMethod.INSTANCE;
+            result = !method.isUndefined() && (method.getVisibility() == PUBLIC || method.getVisibility() == PROTECTED);
+        }
+
+        return result ? context.tru : context.fals;
     }
 
-    @JRubyMethod(name = "public_method_defined?", required = 1)
-    public IRubyObject public_method_defined(ThreadContext context, IRubyObject symbol) {
-        DynamicMethod method = searchMethod(TypeConverter.checkID(symbol).idString());
+    @JRubyMethod(name = "public_method_defined?", required = 1, optional = 1)
+    public IRubyObject public_method_defined(ThreadContext context, IRubyObject[] args) {
+        IRubyObject symbol = args[0];
+        boolean searchAncestors = args.length == 1 || args[1].isTrue();
+        String methodName = TypeConverter.checkID(symbol).idString();
+
+        DynamicMethod method;
+        if (searchAncestors) {
+            method = searchMethod(methodName);
+        } else {
+            method = methods.get(methodName);
+            if (method == null) method = UndefinedMethod.INSTANCE;
+        }
 
         return context.runtime.newBoolean(!method.isUndefined() && method.getVisibility() == PUBLIC);
     }
 
-    @JRubyMethod(name = "protected_method_defined?", required = 1)
-    public IRubyObject protected_method_defined(ThreadContext context, IRubyObject symbol) {
-        DynamicMethod method = searchMethod(TypeConverter.checkID(symbol).idString());
+    @JRubyMethod(name = "protected_method_defined?", required = 1, optional = 1)
+    public IRubyObject protected_method_defined(ThreadContext context, IRubyObject[] args) {
+        IRubyObject symbol = args[0];
+        boolean searchAncestors = args.length == 1 || args[1].isTrue();
+        String methodName = TypeConverter.checkID(symbol).idString();
+
+        DynamicMethod method;
+        if (searchAncestors) {
+            method = searchMethod(methodName);
+        } else {
+            method = methods.get(methodName);
+            if (method == null) method = UndefinedMethod.INSTANCE;
+        }
 
         return context.runtime.newBoolean(!method.isUndefined() && method.getVisibility() == PROTECTED);
     }
 
-    @JRubyMethod(name = "private_method_defined?", required = 1)
-    public IRubyObject private_method_defined(ThreadContext context, IRubyObject symbol) {
-        DynamicMethod method = searchMethod(TypeConverter.checkID(symbol).idString());
+    @JRubyMethod(name = "private_method_defined?", required = 1, optional = 1)
+    public IRubyObject private_method_defined(ThreadContext context, IRubyObject[] args) {
+        IRubyObject symbol = args[0];
+        boolean searchAncestors = args.length == 1 || args[1].isTrue();
+        String methodName = TypeConverter.checkID(symbol).idString();
+
+        DynamicMethod method;
+        if (searchAncestors) {
+            method = searchMethod(methodName);
+        } else {
+            method = methods.get(methodName);
+            if (method == null) method = UndefinedMethod.INSTANCE;
+        }
 
         return context.runtime.newBoolean(!method.isUndefined() && method.getVisibility() == PRIVATE);
     }
