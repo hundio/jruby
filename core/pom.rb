@@ -41,7 +41,7 @@ project 'JRuby Core' do
 
   # exclude jnr-ffi to avoid problems with shading and relocation of the asm packages
   jar 'com.github.jnr:jnr-netdb:1.1.6', :exclusions => ['com.github.jnr:jnr-ffi']
-  jar 'com.github.jnr:jnr-enxio:0.21', :exclusions => ['com.github.jnr:jnr-ffi']
+  jar 'com.github.jnr:jnr-enxio:0.22', :exclusions => ['com.github.jnr:jnr-ffi']
   jar 'com.github.jnr:jnr-unixsocket:0.23', :exclusions => ['com.github.jnr:jnr-ffi']
   jar 'com.github.jnr:jnr-posix:3.0.50', :exclusions => ['com.github.jnr:jnr-ffi']
   jar 'com.github.jnr:jnr-constants:0.9.12', :exclusions => ['com.github.jnr:jnr-ffi']
@@ -50,7 +50,7 @@ project 'JRuby Core' do
   jar 'com.github.jnr:jffi:${jffi.version}:native'
 
   jar 'org.jruby.joni:joni:2.1.29'
-  jar 'org.jruby.jcodings:jcodings:1.0.44'
+  jar 'org.jruby.jcodings:jcodings:1.0.45'
   jar 'org.jruby:dirgra:0.3'
 
   jar 'com.headius:invokebinder:1.11'
@@ -307,6 +307,9 @@ project 'JRuby Core' do
                            {pattern: 'org.objectweb', shadedPattern: 'org.jruby.org.objectweb' },
                            {pattern: 'me.qmx.jitescript', shadedPattern: 'org.jruby.me.qmx.jitescript'},
                        ],
+                       transformers: [ {'@implementation' => 'org.apache.maven.plugins.shade.resource.ManifestResourceTransformer',
+                                         'mainClass' => 'org.jruby.Main',
+                                         'manifestEntries' => {'Automatic-Module-Name' => 'org.jruby.core'}}],
                        filters:
                            {filter: {artifact: 'com.headius:invokebinder', excludes: {exclude: '**/module-info.class'}}}
         )

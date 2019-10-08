@@ -188,6 +188,7 @@ import java.nio.charset.Charset;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -870,8 +871,8 @@ public final class Ruby implements Constantizable {
              * This will capture any return which says it should return to a script scope as the reasonable
              * exit point.  We still raise when jump off point is anything else since that is a bug.
              */
-            if (!ex.methodToReturnFrom.isScriptScope()) {
-                System.err.println("Unexpected 'return' escaped the runtime from " + ex.returnScope + " to " + ex.methodToReturnFrom);
+            if (!ex.methodToReturnFrom.getStaticScope().getIRScope().isScriptScope()) {
+                System.err.println("Unexpected 'return' escaped the runtime from " + ex.returnScope + " to " + ex.methodToReturnFrom.getStaticScope().getIRScope());
                 System.err.println(ThreadContext.createRawBacktraceStringFromThrowable(ex, false));
                 Throwable t = ex;
                 while ((t = t.getCause()) != null) {
@@ -1248,14 +1249,14 @@ public final class Ruby implements Constantizable {
         // relationship handled either more directly or through a descriptive method
         // FIXME: We need a failing test case for this since removing it did not regress tests
         IRScope top = new IRScriptBody(irManager, "", context.getCurrentScope().getStaticScope());
-        top.allocateInterpreterContext(new ArrayList<Instr>());
+        top.allocateInterpreterContext(Collections.EMPTY_LIST);
 
         // Initialize the "dummy" class used as a marker
         dummyClass = new RubyClass(this, classClass);
-        dummyClass.freeze(context);
+        dummyClass.setFrozen(true);
 
         // Create global constants and variables
-        RubyGlobal.createGlobals(context, this);
+        RubyGlobal.createGlobals(this);
 
         // Prepare LoadService and load path
         getLoadService().init(config.getLoadPaths());
@@ -2951,10 +2952,8 @@ public final class Ruby implements Constantizable {
     public void loadFile(String scriptName, InputStream in, boolean wrap) {
         IRubyObject self = wrap ? getTopSelf().rbClone() : getTopSelf();
         ThreadContext context = getCurrentContext();
-        String file = context.getFile();
 
         try {
-            ThreadContext.pushBacktrace(context, ROOT_FRAME_NAME, file, 0);
             context.preNodeEval(self);
             ParseResult parseResult = parseFile(scriptName, in, null);
 
@@ -2964,53 +2963,33 @@ public final class Ruby implements Constantizable {
             runInterpreter(context, parseResult, self);
         } finally {
             context.postNodeEval();
-            ThreadContext.popBacktrace(context);
         }
     }
 
     public void loadScope(IRScope scope, boolean wrap) {
         IRubyObject self = wrap ? TopSelfFactory.createTopSelf(this, true) : getTopSelf();
-        ThreadContext context = getCurrentContext();
-        String file = context.getFile();
 
-        try {
-            ThreadContext.pushBacktrace(context, ROOT_FRAME_NAME, file, 0);
-            context.preNodeEval(self);
-
-            if (wrap) {
-                // toss an anonymous module into the search path
-                scope.getStaticScope().setModule(RubyModule.newModule(this));
-            }
-
-            runInterpreter(context, scope, self);
-        } finally {
-            context.postNodeEval();
-            ThreadContext.popBacktrace(context);
+        if (wrap) {
+            // toss an anonymous module into the search path
+            scope.getStaticScope().setModule(RubyModule.newModule(this));
         }
+
+        runInterpreter(getCurrentContext(), scope, self);
     }
 
     public void compileAndLoadFile(String filename, InputStream in, boolean wrap) {
         IRubyObject self = wrap ? getTopSelf().rbClone() : getTopSelf();
-        ThreadContext context = getCurrentContext();
-        InputStream readStream = in;
 
-        String oldFile = context.getFile();
-        int oldLine = context.getLine();
-        try {
-            context.preNodeEval(self);
-            ParseResult parseResult = parseFile(filename, in, null);
-            RootNode root = (RootNode) parseResult;
+        ParseResult parseResult = parseFile(filename, in, null);
+        RootNode root = (RootNode) parseResult;
 
-            if (wrap) {
-                wrapWithModule((RubyBasicObject) self, root);
-            } else {
-                root.getStaticScope().setModule(getObject());
-            }
-
-            runNormally(root, wrap);
-        } finally {
-            context.postNodeEval();
+        if (wrap) {
+            wrapWithModule((RubyBasicObject) self, root);
+        } else {
+            root.getStaticScope().setModule(getObject());
         }
+
+        runNormally(root, wrap);
     }
 
     private void wrapWithModule(RubyBasicObject self, ParseResult result) {
@@ -3203,11 +3182,19 @@ public final class Ruby implements Constantizable {
 
     public void callEventHooks(ThreadContext context, RubyEvent event, String file, int line, String name, IRubyObject type) {
         if (context.isEventHooksEnabled()) {
-            for (int i = 0; i < eventHooks.length; i++) {
-                EventHook eventHook = eventHooks[i];
+            EventHook hooks[] = eventHooks;
 
+            for (EventHook eventHook: hooks) {
                 if (eventHook.isInterestedInEvent(event)) {
-                    eventHook.event(context, event, file, line, name, type);
+                    IRubyObject klass = context.nil;
+                    if (type instanceof RubyModule) {
+                        if (((RubyModule) type).isIncluded()) {
+                            klass = ((RubyModule) type).getNonIncludedClass();
+                        } else if (((RubyModule) type).isSingleton()) {
+                            klass = ((MetaClass) type).getAttached();
+                        }
+                    }
+                    eventHook.event(context, event, file, line, name, klass);
                 }
             }
         }
@@ -3767,11 +3754,11 @@ public final class Ruby implements Constantizable {
     }
 
     public RaiseException newErrnoEAGAINReadableError(String message) {
-        return newLightweightErrnoException(getModule("IO").getClass("EAGAINWaitReadable"), message);
+        return newLightweightErrnoException(getIO().getClass("EAGAINWaitReadable"), message);
     }
 
     public RaiseException newErrnoEAGAINWritableError(String message) {
-        return newLightweightErrnoException(getModule("IO").getClass("EAGAINWaitWritable"), message);
+        return newLightweightErrnoException(getIO().getClass("EAGAINWaitWritable"), message);
     }
 
     public RaiseException newErrnoEISDirError(String message) {

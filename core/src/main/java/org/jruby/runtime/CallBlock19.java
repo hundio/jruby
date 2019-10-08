@@ -12,7 +12,7 @@
  * rights and limitations under the License.
  *
  * Copyright (C) 2006 Ola Bini <ola@ologix.com>
- * 
+ *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
  * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
@@ -53,7 +53,7 @@ public class CallBlock19 extends BlockBody {
     public static Block newCallClosure(IRubyObject self, RubyModule imClass, Arity arity, BlockCallback callback, ThreadContext context) {
         Binding binding = context.currentBinding(self, Visibility.PUBLIC);
         BlockBody body = new CallBlock19(Signature.from(arity), callback, context);
-        
+
         return new Block(body, binding);
     }
 
@@ -65,7 +65,7 @@ public class CallBlock19 extends BlockBody {
 
     @Override
     public IRubyObject call(ThreadContext context, Block block, IRubyObject[] args) {
-        return callback.call(context, args);
+        return callback.call(context, args, Block.NULL_BLOCK);
     }
 
     @Override
@@ -75,32 +75,32 @@ public class CallBlock19 extends BlockBody {
 
     @Override
     public IRubyObject yieldSpecific(ThreadContext context, Block block) {
-        return callback.call(context);
+        return callback.call(context, IRubyObject.NULL_ARRAY, Block.NULL_BLOCK);
     }
 
     @Override
     public IRubyObject yieldSpecific(ThreadContext context, Block block, IRubyObject arg0) {
-        return callback.call(context, arg0);
+        return callback.call(context, arg0, Block.NULL_BLOCK);
     }
 
     @Override
     public IRubyObject yieldSpecific(ThreadContext context, Block block, IRubyObject arg0, IRubyObject arg1) {
-        return callback.call(context, arg0, arg1);
+        return callback.call(context, new IRubyObject[] {arg0, arg1}, Block.NULL_BLOCK);
     }
 
     @Override
     public IRubyObject yieldSpecific(ThreadContext context, Block block, IRubyObject arg0, IRubyObject arg1, IRubyObject arg2) {
-        return callback.call(context, arg0, arg1, arg2);
+        return callback.call(context, new IRubyObject[] {arg0, arg1, arg2}, Block.NULL_BLOCK);
     }
 
     @Override
     protected IRubyObject doYield(ThreadContext context, Block block, IRubyObject value) {
-        return callback.call(context, value);
+        return callback.call(context, value, Block.NULL_BLOCK);
     }
 
     /**
      * Yield to this block, usually passed to the current call.
-     * 
+     *
      * @param context represents the current thread-specific data
      * @param args The args to yield
      * @param self The current self

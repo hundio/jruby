@@ -174,35 +174,31 @@ public class RubyNumeric extends RubyObject {
         long num = num2long(arg);
 
         checkInt(arg, num);
-        return (int)num;
+        return (int) num;
     }
 
     /** check_int
      *
      */
-    public static int checkInt(final Ruby runtime, long num){
-        if (num < Integer.MIN_VALUE) {
-            tooSmall(runtime, num);
-        } else if (num > Integer.MAX_VALUE) {
-            tooBig(runtime, num);
+    public static int checkInt(final Ruby runtime, long num) {
+        if (((int) num) != num) {
+            checkIntFail(runtime, num);
         }
         return (int) num;
     }
 
-    public static void checkInt(IRubyObject arg, long num){
-        if (num < Integer.MIN_VALUE) {
-            tooSmall(arg.getRuntime(), num);
-        } else if (num > Integer.MAX_VALUE) {
-            tooBig(arg.getRuntime(), num);
+    public static void checkInt(IRubyObject arg, long num) {
+        if (((int) num) != num) {
+            checkIntFail(arg.getRuntime(), num);
         }
     }
 
-    private static void tooSmall(Ruby runtime, long num) {
-        throw runtime.newRangeError("integer " + num + " too small to convert to `int'");
-    }
-
-    private static void tooBig(Ruby runtime, long num) {
-        throw runtime.newRangeError("integer " + num + " too big to convert to `int'");
+    private static void checkIntFail(Ruby runtime, long num) {
+        if (num < Integer.MIN_VALUE) {
+            throw runtime.newRangeError("integer " + num + " too small to convert to `int'");
+        } else {
+            throw runtime.newRangeError("integer " + num + " too big to convert to `int'");
+        }
     }
 
     /**
@@ -670,7 +666,8 @@ public class RubyNumeric extends RubyObject {
     @Override
     @JRubyMethod(name = "initialize_copy", visibility = Visibility.PRIVATE)
     public IRubyObject initialize_copy(IRubyObject arg) {
-        throw getRuntime().newTypeError(str(getRuntime(), "can't copy ", types(getRuntime(), getType())));
+        final Ruby runtime = metaClass.runtime;
+        throw runtime.newTypeError(str(runtime, "can't copy ", types(runtime, getType())));
     }
 
     /** num_coerce
@@ -678,7 +675,7 @@ public class RubyNumeric extends RubyObject {
      */
     @JRubyMethod(name = "coerce")
     public IRubyObject coerce(IRubyObject other) {
-        final Ruby runtime = getRuntime();
+        final Ruby runtime = metaClass.runtime;
         if (metaClass == other.getMetaClass()) return runtime.newArray(other, this);
 
         IRubyObject cdr = RubyKernel.new_float(runtime, this);
@@ -724,9 +721,9 @@ public class RubyNumeric extends RubyObject {
     @JRubyMethod(name = "<=>")
     public IRubyObject op_cmp(IRubyObject other) {
         if (this == other) { // won't hurt fixnums
-            return RubyFixnum.zero(getRuntime());
+            return RubyFixnum.zero(metaClass.runtime);
         }
-        return getRuntime().getNil();
+        return metaClass.runtime.getNil();
     }
 
     /** num_eql
@@ -891,7 +888,7 @@ public class RubyNumeric extends RubyObject {
      */
     @JRubyMethod(name = "integer?")
     public IRubyObject integer_p() {
-        return getRuntime().getFalse();
+        return metaClass.runtime.getFalse();
     }
 
     /** num_zero_p
@@ -904,7 +901,7 @@ public class RubyNumeric extends RubyObject {
     }
 
     public boolean isZero() {
-        return zero_p(getRuntime().getCurrentContext()).isTrue();
+        return zero_p(metaClass.runtime.getCurrentContext()).isTrue();
     }
 
     /** num_nonzero_p
@@ -992,11 +989,11 @@ public class RubyNumeric extends RubyObject {
         }
         if (!hash.isNil()) {
             IRubyObject[] values = ArgsUtil.extractKeywordArgs(context, (RubyHash) hash, STEP_KEYS);
-            if (values[0] != UNDEF) {
+            if (values[0] != null) {
                 if (argc > 0) throw runtime.newArgumentError("to is given twice");
                 newArgs[0] = to = values[0];
             }
-            if (values[1] != UNDEF) {
+            if (values[1] != null) {
                 if (argc > 1) throw runtime.newArgumentError("step is given twice");
                 newArgs[1] = step = values[1];
             }
@@ -1300,7 +1297,7 @@ public class RubyNumeric extends RubyObject {
     }
 
     public RubyRational convertToRational() {
-        final ThreadContext context = getRuntime().getCurrentContext();
+        final ThreadContext context = metaClass.runtime.getCurrentContext();
         return RubyRational.newRationalRaw(context.runtime, numerator(context), denominator(context));
     }
 
@@ -1427,11 +1424,11 @@ public class RubyNumeric extends RubyObject {
     }
 
     public boolean isNegative() {
-        return isNegative(getRuntime().getCurrentContext()).isTrue();
+        return isNegative(metaClass.runtime.getCurrentContext()).isTrue();
     }
 
     public boolean isPositive() {
-        return isPositive(getRuntime().getCurrentContext()).isTrue();
+        return isPositive(metaClass.runtime.getCurrentContext()).isTrue();
     }
 
     protected static IRubyObject compareWithZero(ThreadContext context, IRubyObject num, JavaSites.CheckedSites site) {
@@ -1455,7 +1452,7 @@ public class RubyNumeric extends RubyObject {
 
     @Deprecated
     public final IRubyObject rbClone(IRubyObject[] args) {
-        ThreadContext context = getRuntime().getCurrentContext();
+        ThreadContext context = metaClass.runtime.getCurrentContext();
         switch (args.length) {
             case 0: return rbClone(context);
             case 1: return rbClone(context, args[0]);
@@ -1475,8 +1472,8 @@ public class RubyNumeric extends RubyObject {
             throw context.runtime.newArgumentError("wrong number of arguments (given 1, expected 0)");
         }
 
-        IRubyObject[] rets = ArgsUtil.extractKeywordArgs(context, (RubyHash) arg, "freeze");
-        if (!rets[0].isTrue()) throw context.runtime.newArgumentError("can't unfreeze " + getType());
+        IRubyObject ret = ArgsUtil.extractKeywordArg(context, (RubyHash) arg, "freeze");
+        if (ret != null && !ret.isTrue()) throw context.runtime.newArgumentError("can't unfreeze " + getType());
 
         return this;
     }

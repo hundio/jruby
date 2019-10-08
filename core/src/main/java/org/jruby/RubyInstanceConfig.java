@@ -585,6 +585,13 @@ public class RubyInstanceConfig {
     }
 
     /**
+     * @return true if JIT compilation is enabled
+     */
+    public boolean isJitEnabled() {
+        return getJitThreshold() >= 0 && getCompileMode().shouldJIT();
+    }
+
+    /**
      * @see Options#LAUNCH_INPROC
      */
     public boolean isRunRubyInProcess() {
@@ -1757,6 +1764,8 @@ public class RubyInstanceConfig {
      * Comma-separated list of methods to exclude from JIT compilation.
      * Specify as "Module", "Module#method" or "method".
      *
+     * Also supports excluding based on implementation_file.rb syntax.
+     *
      * Set with the <tt>jruby.jit.exclude</tt> system property.
      */
     public static final String COMPILE_EXCLUDE = Options.JIT_EXCLUDE.load();
@@ -1837,7 +1846,7 @@ public class RubyInstanceConfig {
 
     public static final boolean JIT_LOADING_DEBUG = Options.JIT_DEBUG.load();
 
-    public static final boolean CAN_SET_ACCESSIBLE = Options.JI_SETACCESSIBLE.load();
+    public static final boolean SET_ACCESSIBLE = Options.JI_SETACCESSIBLE.load();
 
     // properties for logging exceptions, backtraces, and caller invocations
     public static final boolean LOG_EXCEPTIONS = Options.LOG_EXCEPTIONS.load();
@@ -1894,6 +1903,10 @@ public class RubyInstanceConfig {
                 return Opcodes.V10;
             case "11" :
                 return Opcodes.V11;
+            case "12" :
+                return Opcodes.V12;
+            case "13" :
+                return Opcodes.V13;
         }
     }
 
@@ -2044,4 +2057,6 @@ public class RubyInstanceConfig {
      */
     @Deprecated
     public static final boolean NATIVE_NET_PROTOCOL = Options.NATIVE_NET_PROTOCOL.load();
+    @Deprecated
+    public static final boolean CAN_SET_ACCESSIBLE = Options.JI_SETACCESSIBLE.load();
 }

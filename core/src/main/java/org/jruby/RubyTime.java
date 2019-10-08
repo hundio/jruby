@@ -497,7 +497,7 @@ public class RubyTime extends RubyObject {
     }
 
     public final RubyTime localtime() {
-        return localtime(getRuntime().getCurrentContext());
+        return localtime(metaClass.runtime.getCurrentContext());
     }
 
     @JRubyMethod(name = "localtime")
@@ -533,7 +533,7 @@ public class RubyTime extends RubyObject {
 
     @JRubyMethod(name = {"gmt?", "utc?", "gmtime?"})
     public RubyBoolean gmt() {
-        return getRuntime().newBoolean(isUTC());
+        return metaClass.runtime.newBoolean(isUTC());
     }
 
     public boolean isUTC() {
@@ -542,11 +542,11 @@ public class RubyTime extends RubyObject {
 
     @JRubyMethod(name = {"getgm", "getutc"})
     public RubyTime getgm() {
-        return newTime(getRuntime(), dt.withZone(DateTimeZone.UTC), nsec);
+        return newTime(metaClass.runtime, dt.withZone(DateTimeZone.UTC), nsec);
     }
 
     public final RubyTime getlocal() {
-        return getlocal(getRuntime().getCurrentContext());
+        return getlocal(metaClass.runtime.getCurrentContext());
     }
 
     @JRubyMethod(name = "getlocal")
@@ -964,6 +964,41 @@ public class RubyTime extends RubyObject {
     @JRubyMethod
     public RubyInteger yday() {
         return getRuntime().newFixnum(dt.getDayOfYear());
+    }
+
+    @JRubyMethod(name = "sunday?")
+    public RubyBoolean sunday_p(ThreadContext context) {
+        return context.runtime.newBoolean((dt.getDayOfWeek() % 7) == 0);
+    }
+
+    @JRubyMethod(name = "monday?")
+    public RubyBoolean monday_p(ThreadContext context) {
+        return context.runtime.newBoolean((dt.getDayOfWeek() % 7) == 1);
+    }
+
+    @JRubyMethod(name = "tuesday?")
+    public RubyBoolean tuesday_p(ThreadContext context) {
+        return context.runtime.newBoolean((dt.getDayOfWeek() % 7) == 2);
+    }
+
+    @JRubyMethod(name = "wednesday?")
+    public RubyBoolean wednesday_p(ThreadContext context) {
+        return context.runtime.newBoolean((dt.getDayOfWeek() % 7) == 3);
+    }
+
+    @JRubyMethod(name = "thursday?")
+    public RubyBoolean thursday_p(ThreadContext context) {
+        return context.runtime.newBoolean((dt.getDayOfWeek() % 7) == 4);
+    }
+
+    @JRubyMethod(name = "friday?")
+    public RubyBoolean friday_p(ThreadContext context) {
+        return context.runtime.newBoolean((dt.getDayOfWeek() % 7) == 5);
+    }
+
+    @JRubyMethod(name = "saturday?")
+    public RubyBoolean saturday_p(ThreadContext context) {
+        return context.runtime.newBoolean((dt.getDayOfWeek() % 7) == 6);
     }
 
     @Deprecated

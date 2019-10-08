@@ -88,7 +88,7 @@ import org.jruby.ir.IRClosure;
 import org.jruby.ir.IRMethod;
 import org.jruby.ir.targets.Bootstrap;
 import org.jruby.javasupport.JavaClass;
-import org.jruby.javasupport.binding.Initializer;
+import org.jruby.javasupport.binding.MethodGatherer;
 import org.jruby.parser.StaticScope;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.CallType;
@@ -709,14 +709,15 @@ public class RubyModule extends RubyObject {
     }
 
     private String calculateAnonymousName() {
-        if (anonymousName == null) {
+        String cachedName = this.cachedName; // re-use cachedName field since it won't be set for anonymous class
+        if (cachedName == null) {
             // anonymous classes get the #<Class:0xdeadbeef> format
             StringBuilder anonBase = new StringBuilder(24);
             anonBase.append("#<").append(metaClass.getRealClass().getName()).append(":0x");
             anonBase.append(Integer.toHexString(System.identityHashCode(this))).append('>');
-            anonymousName = anonBase.toString();
+            cachedName = this.cachedName = anonBase.toString();
         }
-        return anonymousName;
+        return cachedName;
     }
 
 
@@ -1151,7 +1152,7 @@ public class RubyModule extends RubyObject {
 
         @SuppressWarnings("deprecation")
         public void clump(final Class klass) {
-            Method[] declaredMethods = Initializer.DECLARED_METHODS.get(klass);
+            Method[] declaredMethods = MethodGatherer.DECLARED_METHODS.get(klass);
             for (Method method: declaredMethods) {
                 JRubyMethod anno = method.getAnnotation(JRubyMethod.class);
 
@@ -2983,7 +2984,7 @@ public class RubyModule extends RubyObject {
      */
     @JRubyMethod(name = "include", required = 1, rest = true)
     public RubyModule include(IRubyObject[] modules) {
-        ThreadContext context = getRuntime().getCurrentContext();
+        ThreadContext context = metaClass.runtime.getCurrentContext();
         // MRI checks all types first:
         for (int i = modules.length; --i >= 0; ) {
             IRubyObject module = modules[i];
@@ -3357,7 +3358,7 @@ public class RubyModule extends RubyObject {
     public static RubyArray nesting(ThreadContext context, IRubyObject recv, Block block) {
         Ruby runtime = context.runtime;
         RubyModule object = runtime.getObject();
-        StaticScope scope = context.getCurrentScope().getStaticScope();
+        StaticScope scope = context.getCurrentStaticScope();
         RubyArray result = runtime.newArray();
 
         for (StaticScope current = scope; current.getModule() != object; current = current.getPreviousCRefScope()) {
@@ -4135,7 +4136,7 @@ public class RubyModule extends RubyObject {
         // since some classes won't assert the upper case first char (anonymous classes start with a digit)
 
         IRubyObject value = getConstantNoConstMissing(name, inherit, includeObject);
-        Ruby runtime = getRuntime();
+        Ruby runtime = metaClass.runtime;
 
         return value != null ? value :
             callMethod(runtime.getCurrentContext(), "const_missing", runtime.newSymbol(name));
@@ -4245,8 +4246,8 @@ public class RubyModule extends RubyObject {
     }
 
     public IRubyObject getConstantFromConstMissing(String name) {
-        return callMethod(getRuntime().getCurrentContext(),
-                "const_missing", getRuntime().fastNewSymbol(name));
+        final Ruby runtime = metaClass.runtime;
+        return callMethod(runtime.getCurrentContext(), "const_missing", runtime.fastNewSymbol(name));
     }
 
     @Deprecated
@@ -4981,22 +4982,16 @@ public class RubyModule extends RubyObject {
     public RubyModule parent;
 
     /**
-     * The base name of this class/module, excluding nesting. If null, this is
-     * an anonymous class.
+     * The base name of this class/module, excluding nesting. If null, this is an anonymous class.
      */
     protected String baseName;
 
     /**
-     * The cached anonymous class name, since it never changes and has a nonzero
-     * cost to calculate.
+     * The cached name, full class name e.g. Foo::Bar if this class and all containing classes are non-anonymous.
+     * The cached anonymous class name never changes and has a nonzero cost to calculate.
      */
-    private String anonymousName;
-
-    /**
-     * The cached name, only cached once this class and all containing classes are non-anonymous
-     */
-    private String cachedName;
-    private RubyString cachedRubyName;
+    private transient String cachedName;
+    private transient RubyString cachedRubyName;
 
     @SuppressWarnings("unchecked")
     private volatile Map<String, ConstantEntry> constants = Collections.EMPTY_MAP;
@@ -5128,7 +5123,7 @@ public class RubyModule extends RubyObject {
     @Override
     public <T> T toJava(Class<T> target) {
         if (target == Class.class) { // try java_class for proxy modules
-            final ThreadContext context = getRuntime().getCurrentContext();
+            final ThreadContext context = metaClass.runtime.getCurrentContext();
             IRubyObject javaClass = JavaClass.java_class(context, this);
             if ( ! javaClass.isNil() ) return javaClass.toJava(target);
         }

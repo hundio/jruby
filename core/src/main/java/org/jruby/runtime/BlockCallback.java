@@ -12,7 +12,7 @@
  * rights and limitations under the License.
  *
  * Copyright (C) 2006 Ola Bini <ola@ologix.com>
- * 
+ *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
  * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
@@ -36,21 +36,7 @@ import org.jruby.runtime.builtin.IRubyObject;
 public interface BlockCallback {
     IRubyObject call(ThreadContext context, IRubyObject[] args, Block block);
 
-    // common ops to be re-defined if few args expected (avoids array packing)
-
-    default IRubyObject call(ThreadContext context) {
-        return call(context, IRubyObject.NULL_ARRAY, Block.NULL_BLOCK);
-    }
-
-    default IRubyObject call(ThreadContext context, IRubyObject arg0) {
-        return call(context, new IRubyObject[] { arg0 }, Block.NULL_BLOCK);
-    }
-
-    default IRubyObject call(ThreadContext context, IRubyObject arg0, IRubyObject arg1) {
-        return call(context, new IRubyObject[] { arg0, arg1 }, Block.NULL_BLOCK);
-    }
-
-    default IRubyObject call(ThreadContext context, IRubyObject... args) {
-        return call(context, args, Block.NULL_BLOCK);
+    default IRubyObject call(ThreadContext context, IRubyObject arg, Block block) {
+        return call(context, new IRubyObject[] { arg }, block);
     }
  }

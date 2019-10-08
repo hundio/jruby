@@ -14,6 +14,7 @@ import org.jruby.RubyArray;
 import org.jruby.RubyBasicObject;
 import org.jruby.RubyBoolean;
 import org.jruby.RubyClass;
+import org.jruby.RubyComplex;
 import org.jruby.RubyEncoding;
 import org.jruby.RubyFixnum;
 import org.jruby.RubyFloat;
@@ -25,6 +26,7 @@ import org.jruby.RubyMethod;
 import org.jruby.RubyModule;
 import org.jruby.RubyNil;
 import org.jruby.RubyProc;
+import org.jruby.RubyRational;
 import org.jruby.RubyRegexp;
 import org.jruby.RubyString;
 import org.jruby.RubySymbol;
@@ -59,6 +61,7 @@ import org.jruby.runtime.CallSite;
 import org.jruby.runtime.CallType;
 import org.jruby.runtime.DynamicScope;
 import org.jruby.runtime.Helpers;
+import org.jruby.runtime.IRBlockBody;
 import org.jruby.runtime.JavaSites.IRRuntimeHelpersSites;
 import org.jruby.runtime.RubyEvent;
 import org.jruby.runtime.ThreadContext;
@@ -106,6 +109,10 @@ public class IRRuntimeHelpers {
         return blockType == LAMBDA && !scope.isArgumentScope();
     }
 
+    public static boolean inMethod(Block.Type blockType) {
+        return blockType == null;
+    }
+
     public static boolean inLambda(Block.Type blockType) {
         return blockType == LAMBDA;
     }
@@ -114,19 +121,19 @@ public class IRRuntimeHelpers {
         return blockType == Block.Type.PROC;
     }
 
-    // FIXME: We should change this to be static scope which is what it is implmented with now and it will make the inlining FIXME below trivial since
-    //   checkforljeinstr can just record IRScope it should return to statically
     // FIXME: ENEBO: If we inline this instr then dynScope will be for the inlined dynscope and that scope could be many things.
     //   CheckForLJEInstr.clone should convert this as appropriate based on what it is being inlined into.
-    public static void checkForLJE(ThreadContext context, DynamicScope dynScope, boolean definedWithinMethod, Block block) {
-        if (inLambda(block.type)) return; // break/return in lambda unconditionally a return.
+    @Interp @JIT
+    public static void checkForLJE(ThreadContext context, DynamicScope currentScope, boolean definedWithinMethod, Block block) {
+        if (inLambda(block.type)) return; // break/return in lambda is unconditionally a return.
 
-        StaticScope staticScope = getContainingReturnToScope(dynScope.getStaticScope());
-        if (staticScope != null) { // we found a valid lexical return scope...but is it higher up the stack?
+        DynamicScope returnToScope = getContainingReturnToScope(currentScope);
+        if (returnToScope != null) { // we found a valid return scope...but is it higher up the stack?
+            StaticScope staticScope = returnToScope.getStaticScope();
             boolean inDefineMethod = staticScope.isArgumentScope() && staticScope.getScopeType().isBlock();
             boolean topLevel = staticScope.getScopeType() == IRScopeType.SCRIPT_BODY;
 
-            if ((definedWithinMethod || inDefineMethod || topLevel) && context.scopeExistsOnCallStack(staticScope)) {
+            if ((definedWithinMethod || inDefineMethod || topLevel) && context.scopeExistsOnCallStack(returnToScope)) {
                 return;
             }
         }
@@ -141,38 +148,38 @@ public class IRRuntimeHelpers {
      * Note: as a result of this all lambdas which contain returns in nested scopes (or itself) can never eliminate
      * its binding.
      */
-    private static StaticScope getContainingLambda(DynamicScope dynamicScope) {
+    private static DynamicScope getContainingLambda(DynamicScope dynamicScope) {
         for (DynamicScope scope = dynamicScope; scope != null && scope.getStaticScope().isBlockScope(); scope = scope.getParentScope()) {
             // we are within a lambda but not a define_method (which seemingly advertises itself as a lambda).
-            if (scope.isLambda() && !scope.getStaticScope().isArgumentScope()) return scope.getStaticScope();
+            if (scope.isLambda() && !scope.getStaticScope().isArgumentScope()) return scope;
         }
 
         return null;
     }
 
     // Create a jump for a non-local return which will return from nearest lambda (which may be itself) or method.
-    @JIT
-    public static IRubyObject initiateNonLocalReturn(DynamicScope dynScope, Block block, IRubyObject returnValue) {
+    @JIT @Interp
+    public static IRubyObject initiateNonLocalReturn(DynamicScope currentScope, Block block, IRubyObject returnValue) {
         if (block != null && inLambda(block.type)) throw new IRWrappedLambdaReturnValue(returnValue);
 
-        StaticScope returnScope = dynScope.getStaticScope();
-        StaticScope returnToScope = getContainingLambda(dynScope);
+        DynamicScope returnToScope = getContainingLambda(currentScope);
 
-        if (returnToScope == null) returnToScope = getContainingReturnToScope(returnScope);
+        if (returnToScope == null) returnToScope = getContainingReturnToScope(currentScope);
 
         assert returnToScope != null: "accidental return scope";
 
-        throw IRReturnJump.create(returnScope.getIRScope(), returnToScope.getIRScope(), returnValue);
+        throw IRReturnJump.create(currentScope.getStaticScope().getIRScope(), returnToScope, returnValue);
     }
 
     // Finds static scope of where we want to *return* to.
-    private static StaticScope getContainingReturnToScope(StaticScope returnLocationScope) {
-        for (StaticScope current = returnLocationScope; current != null; current = current.getEnclosingScope()) {
-            IRScopeType scopeType = current.getScopeType();
+    private static DynamicScope getContainingReturnToScope(DynamicScope returnLocationScope) {
+        for (DynamicScope current = returnLocationScope; current != null; current = current.getParentScope()) {
+            StaticScope staticScope = current.getStaticScope();
+            IRScopeType scopeType = staticScope.getScopeType();
 
             // We hit a method boundary (actual method or a define_method closure) or we exit out of a script/file.
             if (scopeType.isMethodType() ||                              // Contained within a method
-                    scopeType.isBlock() && current.isArgumentScope() ||  // Contained within define_method closure
+                    scopeType.isBlock() && staticScope.isArgumentScope() ||  // Contained within define_method closure
                     scopeType == IRScopeType.SCRIPT_BODY) {              // (2.5+) Contained within a script
                 return current;
             }
@@ -182,7 +189,7 @@ public class IRRuntimeHelpers {
     }
 
     @JIT
-    public static IRubyObject handleNonlocalReturn(DynamicScope dynScope, Object rjExc) throws RuntimeException {
+    public static IRubyObject handleNonlocalReturn(DynamicScope currentScope, Object rjExc) throws RuntimeException {
         if (!(rjExc instanceof IRReturnJump)) {
             Helpers.throwException((Throwable)rjExc);
             return null; // Unreachable
@@ -190,8 +197,8 @@ public class IRRuntimeHelpers {
             IRReturnJump rj = (IRReturnJump)rjExc;
 
             // If we are in the method scope we are supposed to return from, stop p<ropagating.
-            if (rj.methodToReturnFrom == dynScope.getStaticScope().getIRScope()) {
-                if (isDebug()) System.out.println("---> Non-local Return reached target in scope: " + dynScope);
+            if (rj.isReturnToScope(currentScope)) {
+                if (isDebug()) System.out.println("---> Non-local Return reached target in scope: " + currentScope);
                 return (IRubyObject) rj.returnValue;
             }
 
@@ -230,9 +237,8 @@ public class IRRuntimeHelpers {
     }
 
     // Are we within the scope where we want to return the value we are passing down the stack?
-    private static boolean inReturnScope(Block.Type blockType, IRReturnJump exception, IRScope scope) {
-        // blockType == null is any non-block scope but in this case it is always a method based on how we emit instrs.
-        return (blockType == null || inLambda(blockType)) && exception.methodToReturnFrom == scope;
+    private static boolean inReturnToScope(Block.Type blockType, IRReturnJump exception, DynamicScope currentScope) {
+        return (inMethod(blockType) || inLambda(blockType)) && exception.isReturnToScope(currentScope);
     }
 
     @JIT
@@ -241,7 +247,7 @@ public class IRRuntimeHelpers {
             // Wrap the return value in an exception object and push it through the nonlocal return exception
             // paths so that ensures are run, frames/scopes are popped from runtime stacks, etc.
             return ((IRWrappedLambdaReturnValue) exc).returnValue;
-        } else if (exc instanceof IRReturnJump && dynScope != null && inReturnScope(block.type, (IRReturnJump) exc, dynScope.getStaticScope().getIRScope())) {
+        } else if (exc instanceof IRReturnJump && dynScope != null && inReturnToScope(block.type, (IRReturnJump) exc, dynScope)) {
             if (isDebug()) System.out.println("---> Non-local Return reached target in scope: " + dynScope);
             return (IRubyObject) ((IRReturnJump) exc).returnValue;
         } else {
@@ -473,6 +479,18 @@ public class IRRuntimeHelpers {
         return (block == Block.NULL_BLOCK) ? runtime.getNil() : runtime.newProc(Block.Type.PROC, block);
     }
 
+    @JIT
+    public static IRubyObject newProc(ThreadContext context, Block block) {
+        Ruby runtime = context.runtime;
+        return (block == Block.NULL_BLOCK) ? runtime.getNil() : runtime.newProc(Block.Type.PROC, block);
+    }
+
+    @JIT
+    public static RubyProc newLambdaProc(ThreadContext context, Block block) {
+        Ruby runtime = context.runtime;
+        return runtime.newProc(LAMBDA, block);
+    }
+
     public static IRubyObject yield(ThreadContext context, Block b, IRubyObject yieldVal, boolean unwrapArray) {
         return (unwrapArray && (yieldVal instanceof RubyArray)) ? b.yieldArray(context, yieldVal, null) : b.yield(context, yieldVal);
     }
@@ -483,17 +501,16 @@ public class IRRuntimeHelpers {
 
     public static IRubyObject[] convertValueIntoArgArray(ThreadContext context, IRubyObject value,
                                                          org.jruby.runtime.Signature signature, boolean argIsArray) {
-        // SSS FIXME: This should not really happen -- so, some places in the runtime library are breaking this contract.
-        if (argIsArray && !(value instanceof RubyArray)) argIsArray = false;
+        assert !argIsArray || (argIsArray && value instanceof RubyArray);
 
         switch (signature.arityValue()) {
             case -1 :
-                return argIsArray || (signature.opt() > 1 && value instanceof RubyArray) ? ((RubyArray)value).toJavaArray() : new IRubyObject[] { value };
+                return argIsArray || (signature.opt() > 1 && value instanceof RubyArray) ?
+                        ((RubyArray) value).toJavaArray() : new IRubyObject[] { value };
             case  0 : return new IRubyObject[] { value };
             case  1 : {
                if (argIsArray) {
-                   RubyArray valArray = ((RubyArray)value);
-                   if (valArray.size() == 0) {
+                   if (((RubyArray) value).size() == 0) {
                        value = RubyArray.newEmptyArray(context.runtime);
                    }
                }
@@ -501,20 +518,12 @@ public class IRRuntimeHelpers {
             }
             default :
                 if (argIsArray) {
-                    RubyArray valArray = (RubyArray)value;
+                    RubyArray valArray = (RubyArray) value;
                     if (valArray.size() == 1) value = valArray.eltInternal(0);
                     value = Helpers.aryToAry(context, value);
-                    return (value instanceof RubyArray) ? ((RubyArray)value).toJavaArray() : new IRubyObject[] { value };
+                    return (value instanceof RubyArray) ? ((RubyArray) value).toJavaArray() : new IRubyObject[] { value };
                 } else {
-                    IRubyObject val0 = Helpers.aryToAry(context, value);
-                    // FIXME: This logic exists in RubyProc and IRRubyBlockBody. consolidate when we do block call protocol work
-                    if (val0.isNil()) {
-                        return new IRubyObject[] { value };
-                    } else if (!(val0 instanceof RubyArray)) {
-                        throw context.runtime.newTypeError(value.getType().getName() + "#to_ary should return Array");
-                    } else {
-                        return ((RubyArray) val0).toJavaArray();
-                    }
+                    return IRBlockBody.toAry(context, value);
                 }
         }
     }
@@ -578,9 +587,12 @@ public class IRRuntimeHelpers {
 
     @JIT
     public static IRubyObject[] frobnicateKwargsArgument(ThreadContext context, IRubyObject[] args, int requiredArgsCount) {
-        // No kwarg because required args slurp them up.
+        // FIXME: JIT on block circular args test in spec:compiler is passing in a null value for args.  It does not do this for methods so a bandaid for now.
+        if (args == null) return args;
+
         int length = args.length;
 
+        // No kwarg because required args slurp them up.
         if (length <= requiredArgsCount) return args;
 
         final IRubyObject maybeKwargs = toHash(context, args[length - 1]);
@@ -629,12 +641,12 @@ public class IRRuntimeHelpers {
      * @param runtime the current runtime
      * @return whether to print IR
      */
-    public static boolean shouldPrintIR(Ruby runtime) {
+    public static boolean shouldPrintIR(final Ruby runtime) {
         boolean booting = runtime.isBooting();
         boolean print = Options.IR_PRINT.load();
         boolean printAll = Options.IR_PRINT_ALL.load();
 
-        return (print && !booting) || (booting && printAll);
+        return (!booting && print) || (booting && printAll);
     }
 
     private static class DivvyKeywordsVisitor extends RubyHash.VisitorWithState {
@@ -1303,7 +1315,7 @@ public class IRRuntimeHelpers {
 
     @JIT
     public static final ByteList newByteListFromRaw(Ruby runtime, String str, String encoding) {
-        return new ByteList(str.getBytes(RubyEncoding.ISO), runtime.getEncodingService().getEncodingFromString(encoding), false);
+        return new ByteList(RubyEncoding.encodeISO(str), runtime.getEncodingService().getEncodingFromString(encoding), false);
     }
 
     @JIT
@@ -1761,9 +1773,13 @@ public class IRRuntimeHelpers {
         return context.runtime.newArgumentError(str(context.runtime, "missing keyword: ", ids(context.runtime, id)));
     }
 
-    @JIT
     public static void pushExitBlock(ThreadContext context, Block blk) {
         context.runtime.pushEndBlock(context.runtime.newProc(LAMBDA, blk));
+    }
+
+    @JIT
+    public static void pushExitBlock(ThreadContext context, Object blk) {
+        context.runtime.pushEndBlock(context.runtime.newProc(LAMBDA, getBlockFromObject(context, blk)));
     }
 
     @JIT
@@ -1854,7 +1870,7 @@ public class IRRuntimeHelpers {
         if (args.length != 1) return args;
 
         // Potentially expand single value if it is an array depending on what we are calling.
-        return IRRuntimeHelpers.convertValueIntoArgArray(context, args[0], b.getBody().getSignature(), b.type == Block.Type.NORMAL && args[0] instanceof RubyArray);
+        return IRRuntimeHelpers.convertValueIntoArgArray(context, args[0], b.getBody().getSignature(), args[0] instanceof RubyArray && b.type == Block.Type.NORMAL);
     }
 
     private static IRubyObject[] prepareBlockArgsInternal(ThreadContext context, Block block, IRubyObject[] args) {
@@ -1995,12 +2011,30 @@ public class IRRuntimeHelpers {
         return null;
     }
 
-    @Interp @JIT
+    @Interp
     public static DynamicScope pushBlockDynamicScopeIfNeeded(ThreadContext context, Block block, boolean pushNewDynScope, boolean reuseParentDynScope) {
         DynamicScope newScope = getNewBlockScope(block, pushNewDynScope, reuseParentDynScope);
         if (newScope != null) {
             context.pushScope(newScope);
         }
+        return newScope;
+    }
+
+    @JIT
+    public static DynamicScope pushBlockDynamicScopeNew(ThreadContext context, Block block) {
+        DynamicScope newScope = block.allocScope(block.getBinding().getDynamicScope());
+
+        context.pushScope(newScope);
+
+        return newScope;
+    }
+
+    @JIT
+    public static DynamicScope pushBlockDynamicScopeReuse(ThreadContext context, Block block) {
+        DynamicScope newScope = block.getBinding().getDynamicScope();
+
+        context.pushScope(newScope);
+
         return newScope;
     }
 
@@ -2156,7 +2190,7 @@ public class IRRuntimeHelpers {
     public static void callTrace(ThreadContext context, RubyEvent event, String name, String filename, int line) {
         if (context.runtime.hasEventHooks()) {
             // FIXME: Try and statically generate END linenumber instead of hacking it.
-            int linenumber = line == -1 ? context.getLine()+1 : line;
+            int linenumber = line == -1 ? context.getLine() : line;
 
             context.trace(event, name, context.getFrameKlazz(), filename, linenumber);
         }
@@ -2180,6 +2214,41 @@ public class IRRuntimeHelpers {
         warnSetConstInRefinement(context, self);
 
         module.setClassVar(id, value);
+    }
+
+    @JIT
+    public static RubyRational newRationalRaw(ThreadContext context, IRubyObject num, IRubyObject den) {
+        return RubyRational.newRationalRaw(context.runtime, num, den);
+    }
+
+    @JIT
+    public static RubyComplex newComplexRaw(ThreadContext context, IRubyObject i) {
+        return RubyComplex.newComplexRawImage(context.runtime, i);
+    }
+
+    @JIT
+    public static RubySymbol newDSymbol(ThreadContext context, IRubyObject symbol) {
+        return context.runtime.newSymbol(symbol.asString().getByteList());
+    }
+
+    @JIT
+    public static RubyClass getStandardError(ThreadContext context) {
+        return context.runtime.getStandardError();
+    }
+
+    @JIT
+    public static RubyClass getObject(ThreadContext context) {
+        return context.runtime.getObject();
+    }
+
+    @JIT @Interp
+    public static IRubyObject svalue(ThreadContext context, Object val) {
+        return (val instanceof RubyArray) ? (RubyArray) val : context.nil;
+    }
+
+    @JIT
+    public static void aliasGlobalVariable(Ruby runtime, Object newName, Object oldName) {
+        runtime.getGlobalVariables().alias(newName.toString(), oldName.toString());
     }
 
     private static IRRuntimeHelpersSites sites(ThreadContext context) {

@@ -63,7 +63,7 @@ describe "Hash literal" do
   end
 
   it "with '==>' in the middle raises SyntaxError" do
-    lambda { eval("{:a ==> 1}") }.should raise_error(SyntaxError)
+    -> { eval("{:a ==> 1}") }.should raise_error(SyntaxError)
   end
 
   it "constructs a new hash with the given elements" do
@@ -128,16 +128,25 @@ describe "Hash literal" do
     {a: 1, **obj, c: 3}.should == {a:1, b: 2, c: 3, d: 4}
   end
 
-  it "raises a TypeError if any splatted elements keys are not symbols" do
-    h = {1 => 2, b: 3}
-    lambda { {a: 1, **h} }.should raise_error(TypeError)
+  ruby_version_is ""..."2.7" do
+    it "raises a TypeError if any splatted elements keys are not symbols" do
+      h = {1 => 2, b: 3}
+      -> { {a: 1, **h} }.should raise_error(TypeError)
+    end
+  end
+
+  ruby_version_is "2.7" do
+    it "allows splatted elements keys that are not symbols" do
+      h = {1 => 2, b: 3}
+      {a: 1, **h}.should == {a: 1, 1 => 2, b: 3}
+    end
   end
 
   it "raises a TypeError if #to_hash does not return a Hash" do
     obj = mock("hash splat")
     obj.should_receive(:to_hash).and_return(obj)
 
-    lambda { {**obj} }.should raise_error(TypeError)
+    -> { {**obj} }.should raise_error(TypeError)
   end
 
   it "does not change encoding of literal string keys during creation" do

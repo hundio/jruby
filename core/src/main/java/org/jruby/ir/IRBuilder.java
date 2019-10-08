@@ -315,7 +315,7 @@ public class IRBuilder {
         this.manager = manager;
         this.scope = scope;
         this.parent = parent;
-        instructions = new ArrayList<>(50);
+        this.instructions = new ArrayList<>(50);
         this.activeRescuers.push(Label.UNRESCUED_REGION_LABEL);
 
         if (parent != null) executesOnce = parent.executesOnce;
@@ -337,9 +337,9 @@ public class IRBuilder {
             needsLineNumInfo = false;
             addInstr(manager.newLineNumber(_lastProcessedLineNum));
             if (RubyInstanceConfig.FULL_TRACE_ENABLED) {
-                addInstr(new TraceInstr(RubyEvent.LINE, methodNameFor(), getFileName(), _lastProcessedLineNum));
+                addInstr(new TraceInstr(RubyEvent.LINE, methodNameFor(), getFileName(), _lastProcessedLineNum + 1));
                 if (needsCodeCoverage()) {
-                    addInstr(new TraceInstr(RubyEvent.COVERAGE, methodNameFor(), getFileName(), _lastProcessedLineNum));
+                    addInstr(new TraceInstr(RubyEvent.COVERAGE, methodNameFor(), getFileName(), _lastProcessedLineNum + 1));
                 }
             }
         }
@@ -560,7 +560,7 @@ public class IRBuilder {
 
         Variable lambda = createTemporaryVariable();
         WrappedIRClosure lambdaBody = new WrappedIRClosure(closure.getSelf(), closure);
-        addInstr(new BuildLambdaInstr(lambda, lambdaBody, scope.getFile(), node.getLine()));
+        addInstr(new BuildLambdaInstr(lambda, lambdaBody));
         return lambda;
     }
 
@@ -2055,8 +2055,8 @@ public class IRBuilder {
 
         if (RubyInstanceConfig.FULL_TRACE_ENABLED) {
             // Explicit line number here because we need a line number for trace before we process any nodes
-            addInstr(manager.newLineNumber(scope.getLine()));
-            addInstr(new TraceInstr(RubyEvent.CALL, getName(), getFileName(), scope.getLine()));
+            addInstr(manager.newLineNumber(scope.getLine() + 1));
+            addInstr(new TraceInstr(RubyEvent.CALL, getName(), getFileName(), scope.getLine() + 1));
         }
 
         prepareImplicitState();                                    // recv_self, add frame block, etc)
@@ -2076,8 +2076,8 @@ public class IRBuilder {
         Operand rv = build(defNode.getBodyNode());
 
         if (RubyInstanceConfig.FULL_TRACE_ENABLED) {
-            addInstr(new LineNumberInstr(defNode.getEndLine()));
-            addInstr(new TraceInstr(RubyEvent.RETURN, getName(), getFileName(), defNode.getEndLine()));
+            addInstr(new LineNumberInstr(defNode.getEndLine() + 1));
+            addInstr(new TraceInstr(RubyEvent.RETURN, getName(), getFileName(), defNode.getEndLine() + 1));
         }
 
         if (rv != null) addInstr(new ReturnInstr(rv));
@@ -2804,32 +2804,12 @@ public class IRBuilder {
         return result;
     }
 
-    private InterpreterContext buildForIterInner(ForNode forNode) {
-        prepareImplicitState();                                    // recv_self, add frame block, etc)
-
-        Node varNode = forNode.getVarNode();
-        if (varNode != null && varNode.getNodeType() != null) receiveBlockArgs(forNode);
-
-        addCurrentScopeAndModule();                                // %current_scope/%current_module
-
-        // conceptually abstract prologue scope instr creation so we can put this at the end of it instead of replicate it.
-        afterPrologueIndex = instructions.size() - 1;
-
-        // Build closure body and return the result of the closure
-        Operand closureRetVal = forNode.getBodyNode() == null ? manager.getNil() : build(forNode.getBodyNode());
-        if (closureRetVal != U_NIL) { // can be null if the node is an if node with returns in both branches.
-            addInstr(new ReturnInstr(closureRetVal));
-        }
-
-        return scope.allocateInterpreterContext(instructions);
-    }
-
     public Operand buildForIter(final ForNode forNode) {
         // Create a new closure context
         IRClosure closure = new IRFor(manager, scope, forNode.getLine(), forNode.getScope(), Signature.from(forNode));
 
         // Create a new nested builder to ensure this gets its own IR builder state like the ensure block stack
-        newIRBuilder(manager, closure).buildForIterInner(forNode);
+        newIRBuilder(manager, closure).buildIterInner(forNode);
 
         return new WrappedIRClosure(buildSelf(), closure);
     }
@@ -2963,29 +2943,39 @@ public class IRBuilder {
     }
 
     private InterpreterContext buildIterInner(IterNode iterNode) {
+        boolean forNode = iterNode instanceof ForNode;
         prepareImplicitState();                                    // recv_self, add frame block, etc)
-        addCurrentScopeAndModule();                                // %current_scope/%current_module
 
-        if (iterNode.getVarNode().getNodeType() != null) receiveBlockArgs(iterNode);
+        if (RubyInstanceConfig.FULL_TRACE_ENABLED) {
+            addInstr(new TraceInstr(RubyEvent.B_CALL, getName(), getFileName(), scope.getLine() + 1));
+        }
 
+        if (!forNode) addCurrentScopeAndModule();                                // %current_scope/%current_module
+        receiveBlockArgs(iterNode);
+        // for adds these after processing binding block args because and operations at that point happen relative
+        // to the previous scope.
+        if (forNode) addCurrentScopeAndModule();                                // %current_scope/%current_module
+
+        // conceptually abstract prologue scope instr creation so we can put this at the end of it instead of replicate it.
         afterPrologueIndex = instructions.size() - 1;
 
         // Build closure body and return the result of the closure
         Operand closureRetVal = iterNode.getBodyNode() == null ? manager.getNil() : build(iterNode.getBodyNode());
-        if (closureRetVal != U_NIL) { // can be U_NIL if the node is an if node with returns in both branches.
-            addInstr(new ReturnInstr(closureRetVal));
+
+        if (RubyInstanceConfig.FULL_TRACE_ENABLED) {
+            addInstr(new TraceInstr(RubyEvent.B_RETURN, getName(), getFileName(), iterNode.getEndLine() + 1));
         }
 
-        // Always add break/return handling even though this
-        // is only required for lambdas, but we don't know at this time,
-        // if this is a lambda or not.
-        //
-        // SSS FIXME: At a later time, see if we can optimize this and
-        // do this on demand.
-        handleBreakAndReturnsInLambdas();
+        // can be U_NIL if the node is an if node with returns in both branches.
+        if (closureRetVal != U_NIL) addInstr(new ReturnInstr(closureRetVal));
+
+        // Add break/return handling in case it is a lambda (we cannot know at parse time what it is).
+        // SSS FIXME: At a later time, see if we can optimize this and do this on demand.
+        if (!forNode) handleBreakAndReturnsInLambdas();
 
         return scope.allocateInterpreterContext(instructions);
     }
+
     public Operand buildIter(final IterNode iterNode) {
         IRClosure closure = new IRClosure(manager, scope, iterNode.getLine(), iterNode.getScope(), Signature.from(iterNode), needsCodeCoverage);
 
@@ -3722,7 +3712,7 @@ public class IRBuilder {
             retVal = processEnsureRescueBlocks(retVal);
 
             if (RubyInstanceConfig.FULL_TRACE_ENABLED) {
-                addInstr(new TraceInstr(RubyEvent.RETURN, getName(), getFileName(), returnNode.getLine()));
+                addInstr(new TraceInstr(RubyEvent.RETURN, getName(), getFileName(), returnNode.getLine() + 1));
             }
 
             addInstr(new ReturnInstr(retVal));
@@ -4063,7 +4053,7 @@ public class IRBuilder {
     }
 
     private InterpreterContext buildModuleOrClassBody(Node bodyNode, int startLine, int endLine) {
-        addInstr(new TraceInstr(RubyEvent.CLASS, null, getFileName(), startLine));
+        addInstr(new TraceInstr(RubyEvent.CLASS, null, getFileName(), startLine + 1));
 
         prepareImplicitState();                                    // recv_self, add frame block, etc)
         addCurrentScopeAndModule();                                // %current_scope/%current_module
@@ -4073,7 +4063,7 @@ public class IRBuilder {
         // This is only added when tracing is enabled because an 'end' will normally have no other instrs which can
         // raise after this point.  When we add trace we need to add one so backtrace generated shows the 'end' line.
         addInstr(manager.newLineNumber(endLine));
-        addInstr(new TraceInstr(RubyEvent.END, null, getFileName(), endLine));
+        addInstr(new TraceInstr(RubyEvent.END, null, getFileName(), endLine + 1));
 
         addInstr(new ReturnInstr(bodyReturnValue));
 
